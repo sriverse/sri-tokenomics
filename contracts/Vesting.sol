@@ -1,9 +1,8 @@
 pragma solidity 0.8.18;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { SafeMath } from "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 
 /**
@@ -12,13 +11,16 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
  * typical vesting scheme, with a cliff and vesting period. Optionally revocable by the
  * owner.
  */
-contract SriTokenVesting is Ownable {
+contract SriTokenVesting {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
     IERC20 private sriToken;
     uint256 private tokensToVest = 0;
+    uint256 private withdrawRequestId = 0;
     uint256 private vestingId = 0;
+    address public owner; // Add owner variable
+
 
     string private constant INSUFFICIENT_BALANCE = "Insufficient balance";
     string private constant INVALID_VESTING_ID = "Invalid vesting id";
@@ -32,19 +34,44 @@ contract SriTokenVesting is Ownable {
         address beneficiary;
         bool released;
     }
+
+    struct MultiSigTokenWithdrawRequest {
+        uint256 amount;
+        uint256 releaseTime;
+        address[] signedBy;
+        bool isReleased;
+    }
+
     mapping(uint256 => Vesting) public vestings;
+
+    mapping(address => bool) public approvers;
+
+    mapping(uint256 => MultiSigTokenWithdrawRequest) public withdrawRequest;
 
     event TokenVestingReleased(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
     event TokenVestingAdded(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
+    event SignatureApproved(uint256 indexed requestId, address indexed approver);
     event TokenVestingRemoved(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
 
     constructor(IERC20 _token) public {
         require(address(_token) != address(0x0), "SRI token address is not valid");
         sriToken = _token;
-        // test data
-        uint256 SCALING_FACTOR = 10 ** 18;
-        uint256 day = 1 minutes;
-        addVesting(0x9fB29AAc15b9A4B7F17c3385939b007540f4d791, block.timestamp + 0, 3230085552 * SCALING_FACTOR);
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Unauthorized: Only owner can perform this action");
+        _;
+    }
+
+    modifier onlyApprover() {
+        require(approvers[msg.sender] == true, "Unauthorized: Only owner can perform this action");
+        _;
+    }
+
+    function transferOwnership(address newOwnerAddress) external onlyOwner {
+        require(newOwnerAddress != address(0), "Invalid new owner address");
+        owner = newOwnerAddress;
     }
 
     function token() public view returns (IERC20) {
@@ -66,7 +93,7 @@ contract SriTokenVesting is Ownable {
     function removeVesting(uint256 _vestingId) public onlyOwner {
         Vesting storage vesting = vestings[_vestingId];
         require(vesting.beneficiary != address(0x0), INVALID_VESTING_ID);
-        require(!vesting.released , VESTING_ALREADY_RELEASED);
+        require(!vesting.released, VESTING_ALREADY_RELEASED);
         vesting.released = true;
         tokensToVest = tokensToVest.sub(vesting.amount);
         emit TokenVestingRemoved(_vestingId, vesting.beneficiary, vesting.amount);
@@ -77,10 +104,10 @@ contract SriTokenVesting is Ownable {
         tokensToVest = tokensToVest.add(_amount);
         vestingId = vestingId.add(1);
         vestings[vestingId] = Vesting({
-        beneficiary: _beneficiary,
-        releaseTime: _releaseTime,
-        amount: _amount,
-        released: false
+        beneficiary : _beneficiary,
+        releaseTime : _releaseTime,
+        amount : _amount,
+        released : false
         });
         emit TokenVestingAdded(vestingId, _beneficiary, _amount);
     }
@@ -88,7 +115,7 @@ contract SriTokenVesting is Ownable {
     function release(uint256 _vestingId) public {
         Vesting storage vesting = vestings[_vestingId];
         require(vesting.beneficiary != address(0x0), INVALID_VESTING_ID);
-        require(!vesting.released , VESTING_ALREADY_RELEASED);
+        require(!vesting.released, VESTING_ALREADY_RELEASED);
         // solhint-disable-next-line not-rely-on-time
         require(block.timestamp >= vesting.releaseTime, NOT_VESTED);
 
@@ -99,8 +126,47 @@ contract SriTokenVesting is Ownable {
         emit TokenVestingReleased(_vestingId, vesting.beneficiary, vesting.amount);
     }
 
-    function retrieveExcessTokens(uint256 _amount) public onlyOwner {
-        require(_amount <= sriToken.balanceOf(address(this)).sub(tokensToVest), INSUFFICIENT_BALANCE);
-        sriToken.safeTransfer(owner(), _amount);
+    function addWithdrawRequest(uint256 _amount) public onlyOwner {
+
+        withdrawRequestId = withdrawRequestId.add(1);
+        withdrawRequest[withdrawRequestId] = MultiSigTokenWithdrawRequest({
+        amount : _amount,
+        releaseTime : 0,
+        signedBy :  new address[](3),
+        isReleased: false
+        });
+    }
+
+    function approveWithdrawRequest(uint256 requestId) public onlyApprover {
+
+        MultiSigTokenWithdrawRequest storage multiSigTokenWithdrawRequest = withdrawRequest[requestId];
+        require(multiSigTokenWithdrawRequest.isReleased == false);
+        require(multiSigTokenWithdrawRequest.signedBy.length < 3);
+
+        bool isAlreadySigned = false;
+        for (uint8 i = 0; i < 3; i++) {
+            if (multiSigTokenWithdrawRequest.signedBy[i] == msg.sender) {
+                isAlreadySigned = true;
+                break;
+            }
+        }
+
+        require(isAlreadySigned == false);
+        uint256 signIndex = multiSigTokenWithdrawRequest.signedBy.length;
+        multiSigTokenWithdrawRequest.signedBy[multiSigTokenWithdrawRequest.signedBy.length] = msg.sender;
+        if (signIndex == 2) {
+            multiSigTokenWithdrawRequest.releaseTime = block.timestamp + 48 * 60 * 60;
+        }
+
+        emit SignatureApproved(requestId, msg.sender);
+    }
+
+    function processApprovedRequest(uint256 requestId) public onlyOwner {
+        MultiSigTokenWithdrawRequest storage multiSigTokenWithdrawRequest = withdrawRequest[requestId];
+        require(multiSigTokenWithdrawRequest.releaseTime != 0);
+        sriToken.safeTransfer(owner, multiSigTokenWithdrawRequest.amount);
+        multiSigTokenWithdrawRequest.isReleased = true;
+
+
     }
 }
