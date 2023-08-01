@@ -74,6 +74,12 @@ contract SriTokenVesting {
         owner = newOwnerAddress;
     }
 
+    function addApprover(address _newApprover) external onlyOwner {
+        require(approvers[_newApprover] == false, "Already exist");
+        approvers[_newApprover] = true;
+
+    }
+
     function token() public view returns (IERC20) {
         return sriToken;
     }
@@ -132,8 +138,8 @@ contract SriTokenVesting {
         withdrawRequest[withdrawRequestId] = MultiSigTokenWithdrawRequest({
         amount : _amount,
         releaseTime : 0,
-        signedBy :  new address[](3),
-        isReleased: false
+        signedBy : new address[](3),
+        isReleased : false
         });
     }
 
