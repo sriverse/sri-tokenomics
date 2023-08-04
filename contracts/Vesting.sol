@@ -35,8 +35,8 @@ contract SriTokenVesting {
         address requester;
         address[] approvedBy;
         bool isApproved;
+        bool vestingStarted;
     }
-
 
     struct MultiSigTokenWithdrawRequest {
         uint256 amount;
@@ -52,7 +52,6 @@ contract SriTokenVesting {
     mapping(uint256 => MultiSigTokenWithdrawRequest) public withdrawRequest;
 
     mapping(uint256 => VestingRequest) public vestingRequest;
-
 
     event VestingRequestCreated(uint256 indexed vestingRequestId, address beneficiary, uint256 amount, address indexed requestedBy);
     event VestingRequestApprove(uint256 indexed vestingRequestId, address approvedBy);
@@ -123,6 +122,7 @@ contract SriTokenVesting {
         amount : _amount,
         requester : msg.sender,
         isApproved : false,
+        vestingStarted : false,
         approvedBy : new address[](3)
         });
         emit VestingRequestCreated(vestingId, _beneficiary, _amount, msg.sender);
@@ -132,10 +132,12 @@ contract SriTokenVesting {
 
         VestingRequest storage vestingRequestInfo = vestingRequest[requestId];
         require(vestingRequestInfo.isApproved == false);
+        require(vestingRequestInfo.requester != msg.sender);
 
         bool isAlreadySigned = false;
         bool hasUnsigned = false;
         uint256 signIndex = 0;
+
         for (uint8 i = 0; i < 3; i++) {
             if (vestingRequestInfo.approvedBy[i] == msg.sender) {
                 isAlreadySigned = true;
@@ -146,10 +148,11 @@ contract SriTokenVesting {
                 signIndex = i;
                 break;
             }
-
         }
+
         require(isAlreadySigned == false);
         require(hasUnsigned == true);
+
         vestingRequestInfo.approvedBy[signIndex] = msg.sender;
         if (signIndex == 2) {
             vestingRequestInfo.isApproved = true;
@@ -158,8 +161,9 @@ contract SriTokenVesting {
     }
 
     function startVesting(uint256 requestId) public onlyApprover {
-        VestingRequest memory vestingRequestInfo = vestingRequest[requestId];
+        VestingRequest storage vestingRequestInfo = vestingRequest[requestId];
         require(vestingRequestInfo.isApproved == true);
+        require(vestingRequestInfo.vestingStarted == false);
         tokensToVest = tokensToVest + vestingRequestInfo.amount;
         vestingId = vestingId + 1;
         vestings[vestingId] = Vesting({
@@ -168,6 +172,7 @@ contract SriTokenVesting {
         amount : vestingRequestInfo.amount,
         released : false
         });
+        vestingRequestInfo.vestingStarted = true;
         emit TokenVestingAdded(vestingId, vestingRequestInfo.beneficiary, vestingRequestInfo.amount);
     }
 
