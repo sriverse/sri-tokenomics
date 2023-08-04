@@ -1,23 +1,15 @@
 pragma solidity 0.8.18;
 
-import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-
-/**
- * @title TokenVesting
- * @dev A token holder contract that can release its token balance gradually like a
- * typical vesting scheme, with a cliff and vesting period. Optionally revocable by the
- * owner.
- */
 contract SriTokenVesting {
-    using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
     IERC20 private sriToken;
     uint256 private tokensToVest = 0;
     uint256 private withdrawRequestId = 0;
+    uint256 private vestingRequestId = 0;
     uint256 private vestingId = 0;
     address public owner; // Add owner variable
 
@@ -28,12 +20,23 @@ contract SriTokenVesting {
     string private constant INVALID_BENEFICIARY = "Invalid beneficiary address";
     string private constant NOT_VESTED = "Tokens have not vested yet";
 
+
     struct Vesting {
         uint256 releaseTime;
         uint256 amount;
         address beneficiary;
         bool released;
     }
+
+    struct VestingRequest {
+        uint256 amount;
+        address beneficiary;
+        uint256 releaseTime;
+        address requester;
+        address[] approvedBy;
+        bool isApproved;
+    }
+
 
     struct MultiSigTokenWithdrawRequest {
         uint256 amount;
@@ -48,6 +51,11 @@ contract SriTokenVesting {
 
     mapping(uint256 => MultiSigTokenWithdrawRequest) public withdrawRequest;
 
+    mapping(uint256 => VestingRequest) public vestingRequest;
+
+
+    event VestingRequestCreated(uint256 indexed vestingRequestId, address beneficiary, uint256 amount, address indexed requestedBy);
+    event VestingRequestApprove(uint256 indexed vestingRequestId, address approvedBy);
     event TokenVestingReleased(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
     event TokenVestingAdded(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
     event SignatureApproved(uint256 indexed requestId, address indexed approver);
@@ -57,6 +65,13 @@ contract SriTokenVesting {
         require(address(_token) != address(0x0), "SRI token address is not valid");
         sriToken = _token;
         owner = msg.sender;
+
+        approvers[0x1357d31951e0822a3305503C03752333D15747ae] = true;
+        approvers[0x6149083bf6540ad439bFD28A2669B34EFCE2EBEA] = true;
+        approvers[0xFd4B4248c2A0B70F8496421824Cc12707448Aad7] = true;
+        approvers[0xe8d736096e62B40Ad5bDAc0029CA4daB87F0a976] = true;
+        approvers[0x14476c04F0D38cC08C2F0e8728d82ffcC5644780] = true;
+
     }
 
     modifier onlyOwner() {
@@ -72,12 +87,6 @@ contract SriTokenVesting {
     function transferOwnership(address newOwnerAddress) external onlyOwner {
         require(newOwnerAddress != address(0), "Invalid new owner address");
         owner = newOwnerAddress;
-    }
-
-    function addApprover(address _newApprover) external onlyOwner {
-        require(approvers[_newApprover] == false, "Already exist");
-        approvers[_newApprover] = true;
-
     }
 
     function token() public view returns (IERC20) {
@@ -101,21 +110,65 @@ contract SriTokenVesting {
         require(vesting.beneficiary != address(0x0), INVALID_VESTING_ID);
         require(!vesting.released, VESTING_ALREADY_RELEASED);
         vesting.released = true;
-        tokensToVest = tokensToVest.sub(vesting.amount);
+        tokensToVest = tokensToVest - vesting.amount;
         emit TokenVestingRemoved(_vestingId, vesting.beneficiary, vesting.amount);
     }
 
-    function addVesting(address _beneficiary, uint256 _releaseTime, uint256 _amount) public onlyOwner {
+    function addVestingRequest(address _beneficiary, uint256 _releaseTime, uint256 _amount) public onlyApprover {
         require(_beneficiary != address(0x0), INVALID_BENEFICIARY);
-        tokensToVest = tokensToVest.add(_amount);
-        vestingId = vestingId.add(1);
-        vestings[vestingId] = Vesting({
+        vestingRequestId = vestingRequestId + 1;
+        vestingRequest[vestingRequestId] = VestingRequest({
         beneficiary : _beneficiary,
         releaseTime : _releaseTime,
         amount : _amount,
+        requester : msg.sender,
+        isApproved : false,
+        approvedBy : new address[](3)
+        });
+        emit VestingRequestCreated(vestingId, _beneficiary, _amount, msg.sender);
+    }
+
+    function approveVestingRequest(uint256 requestId) public onlyApprover {
+
+        VestingRequest storage vestingRequestInfo = vestingRequest[requestId];
+        require(vestingRequestInfo.isApproved == false);
+
+        bool isAlreadySigned = false;
+        bool hasUnsigned = false;
+        uint256 signIndex = 0;
+        for (uint8 i = 0; i < 3; i++) {
+            if (vestingRequestInfo.approvedBy[i] == msg.sender) {
+                isAlreadySigned = true;
+                break;
+            }
+            if (vestingRequestInfo.approvedBy[i] == address(0)) {
+                hasUnsigned = true;
+                signIndex = i;
+                break;
+            }
+
+        }
+        require(isAlreadySigned == false);
+        require(hasUnsigned == true);
+        vestingRequestInfo.approvedBy[signIndex] = msg.sender;
+        if (signIndex == 2) {
+            vestingRequestInfo.isApproved = true;
+        }
+        emit VestingRequestApprove(requestId, msg.sender);
+    }
+
+    function startVesting(uint256 requestId) public onlyApprover {
+        VestingRequest memory vestingRequestInfo = vestingRequest[requestId];
+        require(vestingRequestInfo.isApproved == true);
+        tokensToVest = tokensToVest + vestingRequestInfo.amount;
+        vestingId = vestingId + 1;
+        vestings[vestingId] = Vesting({
+        beneficiary : vestingRequestInfo.beneficiary,
+        releaseTime : vestingRequestInfo.releaseTime,
+        amount : vestingRequestInfo.amount,
         released : false
         });
-        emit TokenVestingAdded(vestingId, _beneficiary, _amount);
+        emit TokenVestingAdded(vestingId, vestingRequestInfo.beneficiary, vestingRequestInfo.amount);
     }
 
     function release(uint256 _vestingId) public {
@@ -127,14 +180,14 @@ contract SriTokenVesting {
 
         require(sriToken.balanceOf(address(this)) >= vesting.amount, INSUFFICIENT_BALANCE);
         vesting.released = true;
-        tokensToVest = tokensToVest.sub(vesting.amount);
+        tokensToVest = tokensToVest - vesting.amount;
         sriToken.safeTransfer(vesting.beneficiary, vesting.amount);
         emit TokenVestingReleased(_vestingId, vesting.beneficiary, vesting.amount);
     }
 
     function addWithdrawRequest(uint256 _amount) public onlyOwner {
 
-        withdrawRequestId = withdrawRequestId.add(1);
+        withdrawRequestId = withdrawRequestId + 1;
         withdrawRequest[withdrawRequestId] = MultiSigTokenWithdrawRequest({
         amount : _amount,
         releaseTime : 0,
@@ -147,32 +200,37 @@ contract SriTokenVesting {
 
         MultiSigTokenWithdrawRequest storage multiSigTokenWithdrawRequest = withdrawRequest[requestId];
         require(multiSigTokenWithdrawRequest.isReleased == false);
-        require(multiSigTokenWithdrawRequest.signedBy.length < 3);
 
         bool isAlreadySigned = false;
+        bool hasUnsigned = false;
+        uint256 signIndex = 0;
         for (uint8 i = 0; i < 3; i++) {
             if (multiSigTokenWithdrawRequest.signedBy[i] == msg.sender) {
                 isAlreadySigned = true;
                 break;
             }
-        }
+            if (multiSigTokenWithdrawRequest.signedBy[i] == address(0)) {
+                hasUnsigned = true;
+                signIndex = i;
+                break;
+            }
 
+        }
         require(isAlreadySigned == false);
-        uint256 signIndex = multiSigTokenWithdrawRequest.signedBy.length;
-        multiSigTokenWithdrawRequest.signedBy[multiSigTokenWithdrawRequest.signedBy.length] = msg.sender;
+        require(hasUnsigned == true);
+        multiSigTokenWithdrawRequest.signedBy[signIndex] = msg.sender;
         if (signIndex == 2) {
             multiSigTokenWithdrawRequest.releaseTime = block.timestamp + 48 * 60 * 60;
         }
-
         emit SignatureApproved(requestId, msg.sender);
     }
 
     function processApprovedRequest(uint256 requestId) public onlyOwner {
         MultiSigTokenWithdrawRequest storage multiSigTokenWithdrawRequest = withdrawRequest[requestId];
-        require(multiSigTokenWithdrawRequest.releaseTime != 0);
-        sriToken.safeTransfer(owner, multiSigTokenWithdrawRequest.amount);
+        require(multiSigTokenWithdrawRequest.isReleased == false);
+        require(multiSigTokenWithdrawRequest.releaseTime < block.timestamp);
         multiSigTokenWithdrawRequest.isReleased = true;
-
+        sriToken.safeTransfer(owner, multiSigTokenWithdrawRequest.amount);
 
     }
 }
