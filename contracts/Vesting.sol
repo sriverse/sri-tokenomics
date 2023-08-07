@@ -59,6 +59,7 @@ contract SriTokenVesting {
     event TokenVestingAdded(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
     event SignatureApproved(uint256 indexed requestId, address indexed approver);
     event TokenVestingRemoved(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
+    event WithdrawRequestCreated(uint256 indexed withdrawRequestId, uint256 amount);
 
     constructor(IERC20 _token) public {
         require(address(_token) != address(0x0), "SRI token address is not valid");
@@ -79,7 +80,7 @@ contract SriTokenVesting {
     }
 
     modifier onlyApprover() {
-        require(approvers[msg.sender] == true, "Unauthorized: Only owner can perform this action");
+        require(approvers[msg.sender] == true, "Unauthorized: Only approver can perform this action");
         _;
     }
 
@@ -125,7 +126,7 @@ contract SriTokenVesting {
         vestingStarted : false,
         approvedBy : new address[](3)
         });
-        emit VestingRequestCreated(vestingId, _beneficiary, _amount, msg.sender);
+        emit VestingRequestCreated(vestingRequestId, _beneficiary, _amount, msg.sender);
     }
 
     function approveVestingRequest(uint256 requestId) public onlyApprover {
@@ -150,7 +151,7 @@ contract SriTokenVesting {
             }
         }
 
-        require(isAlreadySigned == false);
+        require(isAlreadySigned == false, "Already signed");
         require(hasUnsigned == true);
 
         vestingRequestInfo.approvedBy[signIndex] = msg.sender;
@@ -199,6 +200,7 @@ contract SriTokenVesting {
         signedBy : new address[](3),
         isReleased : false
         });
+        emit WithdrawRequestCreated(withdrawRequestId, _amount);
     }
 
     function approveWithdrawRequest(uint256 requestId) public onlyApprover {
