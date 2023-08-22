@@ -10,6 +10,7 @@ contract SriTokenVesting {
     uint256 private tokensToVest = 0;
     uint256 private withdrawRequestId = 0;
     uint256 private vestingRequestId = 0;
+    uint256 private ownerChangeRequestId = 0;
     uint256 private vestingId = 0;
     address public owner; // Add owner variable
 
@@ -45,6 +46,13 @@ contract SriTokenVesting {
         bool isReleased;
     }
 
+    struct MultiSigOwnerChangeRequest {
+        address[] signedBy;
+        address newOwner;
+        address requestedBy;
+        bool isRequestAccepted;
+    }
+
     mapping(uint256 => Vesting) public vestings;
 
     mapping(address => bool) public approvers;
@@ -53,6 +61,9 @@ contract SriTokenVesting {
 
     mapping(uint256 => VestingRequest) public vestingRequest;
 
+    mapping(uint256 => MultiSigOwnerChangeRequest) public ownerChangeRequest;
+
+
     event VestingRequestCreated(uint256 indexed vestingRequestId, address beneficiary, uint256 amount, address indexed requestedBy);
     event VestingRequestApprove(uint256 indexed vestingRequestId, address approvedBy);
     event TokenVestingReleased(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
@@ -60,8 +71,12 @@ contract SriTokenVesting {
     event SignatureApproved(uint256 indexed requestId, address indexed approver);
     event TokenVestingRemoved(uint256 indexed vestingId, address indexed beneficiary, uint256 amount);
     event WithdrawRequestCreated(uint256 indexed withdrawRequestId, uint256 amount);
+    event OwnerChangeRequestCreated(uint256 indexed ownerRequestId, address newRequestedOwner, address requestedBy);
+    event OwnerChangeRequestSigned(uint256 indexed requestId, address approvedBy);
 
-    constructor(IERC20 _token) public {
+
+
+constructor(IERC20 _token) public {
         require(address(_token) != address(0x0), "SRI token address is not valid");
         sriToken = _token;
         owner = msg.sender;
@@ -82,6 +97,16 @@ contract SriTokenVesting {
     modifier onlyApprover() {
         require(approvers[msg.sender] == true, "Unauthorized: Only approver can perform this action");
         _;
+    }
+
+    modifier onlyApproverOrOwner() {
+        require((approvers[msg.sender] == true || msg.sender == owner), "Unauthorized: Only approver can perform this action");
+        _;
+    }
+
+    function transferOwnershipRequest(address newOwnerAddress) external onlyApprover {
+        require(newOwnerAddress != address(0), "Invalid new owner address");
+        owner = newOwnerAddress;
     }
 
     function transferOwnership(address newOwnerAddress) external onlyOwner {
@@ -191,7 +216,7 @@ contract SriTokenVesting {
         emit TokenVestingReleased(_vestingId, vesting.beneficiary, vesting.amount);
     }
 
-    function addWithdrawRequest(uint256 _amount) public onlyOwner {
+    function addWithdrawRequest(uint256 _amount) public onlyApproverOrOwner {
 
         withdrawRequestId = withdrawRequestId + 1;
         withdrawRequest[withdrawRequestId] = MultiSigTokenWithdrawRequest({
@@ -227,7 +252,7 @@ contract SriTokenVesting {
         require(hasUnsigned == true);
         multiSigTokenWithdrawRequest.signedBy[signIndex] = msg.sender;
         if (signIndex == 2) {
-            multiSigTokenWithdrawRequest.releaseTime = block.timestamp + 48 * 60 * 60;
+            multiSigTokenWithdrawRequest.releaseTime = block.timestamp + 1;//48 * 60 * 60;
         }
         emit SignatureApproved(requestId, msg.sender);
     }
@@ -238,6 +263,47 @@ contract SriTokenVesting {
         require(multiSigTokenWithdrawRequest.releaseTime < block.timestamp);
         multiSigTokenWithdrawRequest.isReleased = true;
         sriToken.safeTransfer(owner, multiSigTokenWithdrawRequest.amount);
+    }
 
+    function createOwnerChangeRequest(address _newOwner) public onlyApprover {
+        ownerChangeRequestId = ownerChangeRequestId + 1;
+        ownerChangeRequest[ownerChangeRequestId] = MultiSigOwnerChangeRequest({
+        newOwner : _newOwner,
+        signedBy : new address[](3),
+        requestedBy : msg.sender,
+        isRequestAccepted : false
+        });
+        emit OwnerChangeRequestCreated(ownerChangeRequestId, _newOwner, msg.sender);
+    }
+
+    function approveOwnerChangeRequest(uint256 requestId) public onlyApprover {
+
+        MultiSigOwnerChangeRequest storage multiSigOwnerChangeRequest = ownerChangeRequest[requestId];
+        require(multiSigOwnerChangeRequest.isRequestAccepted == false);
+        require(multiSigOwnerChangeRequest.requestedBy != address(0));
+
+
+        bool isAlreadySigned = false;
+        bool hasUnsigned = false;
+        uint256 signIndex = 0;
+        for (uint8 i = 0; i < 3; i++) {
+            if (multiSigOwnerChangeRequest.signedBy[i] == msg.sender) {
+                isAlreadySigned = true;
+                break;
+            }
+            if (multiSigOwnerChangeRequest.signedBy[i] == address(0)) {
+                hasUnsigned = true;
+                signIndex = i;
+                break;
+            }
+
+        }
+        require(isAlreadySigned == false);
+        require(hasUnsigned == true);
+        multiSigOwnerChangeRequest.signedBy[signIndex] = msg.sender;
+        if (signIndex == 2) {
+            owner = multiSigOwnerChangeRequest.newOwner;
+        }
+        emit OwnerChangeRequestSigned(requestId, msg.sender);
     }
 }

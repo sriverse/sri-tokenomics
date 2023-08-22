@@ -288,6 +288,8 @@ describe("Vesting", function () {
 
             console.log(requestInfo);
 
+            await delay(10);
+
             const tx4 = await sriVesting.processApprovedRequest(1);
             const receipt4 = await tx4.wait(1);
             // let revent = receipt4.events[0];
@@ -305,5 +307,59 @@ describe("Vesting", function () {
 
     });
 
+    describe("Owner change request", function () {
+        let sriVesting: any;
+        let owner: any;
+        let account1: any;
+        let account2: any;
+        let account3: any;
+        let account4: any;
+        let account5: any;
 
+        beforeEach(async () =>{
+            const { vesting } = await deployVestingContract();
+            [owner, account1, account2, account3,account4,account5] = await ethers.getSigners();
+            sriVesting = vesting;
+            console.log(account1.address, account2.address, account3.address,account4.address,account5.address);
+        });
+
+        it("Should able to create request", async function() {
+            const tx = await sriVesting.connect(account1).createOwnerChangeRequest("0x1fd5e6A669145158d11e4EbB1d240040E8FF0245");
+            const receipt = await tx.wait(1);
+
+            expect(receipt.events.length).to.equal(1);
+            let event = receipt.events[0];
+            expect(event.event).to.equal("OwnerChangeRequestCreated");
+            expect(event.args.ownerRequestId).to.equal(1, 'from is correct');
+            expect(event.args.newRequestedOwner).to.equal("0x1fd5e6A669145158d11e4EbB1d240040E8FF0245", 'Value is correct');
+        });
+
+        it("Should able to assign new address", async function() {
+            const oldOwner = await sriVesting.owner();
+            expect(oldOwner).to.equal(owner.address);
+
+            const tx = await sriVesting.connect(account1).createOwnerChangeRequest("0x1fd5e6A669145158d11e4EbB1d240040E8FF0245");
+            const receipt = await tx.wait(1);
+
+            const tx1 = await sriVesting.connect(account1).approveOwnerChangeRequest(1);
+            const receipt1 = await tx1.wait(1);
+
+            const tx2 = await sriVesting.connect(account2).approveOwnerChangeRequest(1);
+            const tx3 = await sriVesting.connect(account3).approveOwnerChangeRequest(1);
+            const receipt3 = await tx3.wait(1);
+
+
+            expect(receipt1.events.length).to.equal(1);
+            let event = receipt1.events[0];
+            expect(event.event).to.equal("OwnerChangeRequestSigned");
+            expect(event.args.approvedBy).to.equal(account1.address, 'from is correct');
+
+
+            const newOwner = await sriVesting.owner();
+
+            expect(newOwner).to.equal("0x1fd5e6A669145158d11e4EbB1d240040E8FF0245");
+
+
+        });
+    });
 });
