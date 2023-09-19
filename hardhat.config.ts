@@ -1,6 +1,7 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
-
+import { config as dotEnvConfig } from "dotenv";
+dotEnvConfig();
 const config: HardhatUserConfig = {
   solidity: "0.8.18",
   etherscan: {
@@ -14,11 +15,11 @@ const config: HardhatUserConfig = {
   networks: {
     mumbai: {
       url: process.env.MUMBAI_URL || "",
-      // accounts: [process.env.POLYGON_KEY],
+      accounts: [process.env.POLYGON_KEY],
     },
     polygon: {
       url: process.env.POLYGON_URL || "",
-      // accounts: [process.env.POLYGON_KEY],
+      accounts: [process.env.POLYGON_KEY],
       gasPrice: 190000000000,
     }
   }

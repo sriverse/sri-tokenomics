@@ -1,18 +1,14 @@
 import { ethers } from "hardhat";
 
 async function main() {
-  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
-  const unlockTime = currentTimestampInSeconds + 60;
 
-  const lockedAmount = ethers.utils.parseEther("0.001");
+  const Vesting = await ethers.getContractFactory("DAOTreasuryVesting");
+  const vesting = await Vesting.deploy("0x0d3478ff714cc01242a13db1C0581DCCe199559A");
 
-  const Lock = await ethers.getContractFactory("Lock");
-  const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
-
-  await lock.deployed();
+  await vesting.deployed();
 
   console.log(
-    `Lock with ${ethers.utils.formatEther(lockedAmount)}ETH and unlock timestamp ${unlockTime} deployed to ${lock.address}`
+    `Vesting contract deployed at ${vesting.address}`
   );
 }
 
@@ -22,3 +18,4 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
